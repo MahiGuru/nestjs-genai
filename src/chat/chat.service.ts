@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BedrockService, BedrockMessage } from '../bedrock/bedrock.service';
@@ -21,13 +22,14 @@ export class ChatService {
     private readonly configService: ConfigService,
   ) {
     // Allow fallback to mock responses if Bedrock is not available
-    this.useBedrockService = this.configService.get<string>('NODE_ENV') !== 'development' ||
-                            this.configService.get<boolean>('USE_BEDROCK', true);
+    this.useBedrockService =
+      this.configService.get<string>('NODE_ENV') !== 'development' ||
+      this.configService.get<boolean>('USE_BEDROCK', true);
   }
 
   async processMessage(messageDto: MessageDto): Promise<string> {
     this.logger.log(`Processing message from user: ${messageDto.userId}`);
-    
+
     try {
       if (this.useBedrockService) {
         return await this.processWithBedrock(messageDto);
@@ -36,8 +38,11 @@ export class ChatService {
         return await this.processMockResponse(messageDto);
       }
     } catch (error) {
-      this.logger.error(`Error processing message: ${error.message}`, error.stack);
-      
+      this.logger.error(
+        `Error processing message: ${error.message}`,
+        error.stack,
+      );
+
       // Fallback to mock response if Bedrock fails
       this.logger.warn('Falling back to mock response due to error');
       return await this.processMockResponse(messageDto);
@@ -47,7 +52,7 @@ export class ChatService {
   private async processWithBedrock(messageDto: MessageDto): Promise<string> {
     // Get or create conversation context
     const context = this.getOrCreateContext(messageDto.userId);
-    
+
     // Add user message to context
     context.messages.push({
       role: 'user',
@@ -61,8 +66,9 @@ export class ChatService {
     const messagesWithSystem = this.addSystemPrompt(context.messages);
 
     // Call Bedrock service
-    const response = await this.bedrockService.generateResponse(messagesWithSystem);
-    
+    const response =
+      await this.bedrockService.generateResponse(messagesWithSystem);
+
     // Add assistant response to context
     context.messages.push({
       role: 'assistant',
@@ -71,8 +77,10 @@ export class ChatService {
 
     context.lastActivity = new Date();
 
-    this.logger.log(`Generated response with ${response.usage?.outputTokens || 0} tokens`);
-    
+    this.logger.log(
+      `Generated response with ${response.usage?.outputTokens || 0} tokens`,
+    );
+
     return response.content;
   }
 
@@ -80,8 +88,10 @@ export class ChatService {
     messageDto: MessageDto,
     onChunk: (chunk: string) => void,
   ): Promise<void> {
-    this.logger.log(`Processing streaming message from user: ${messageDto.userId}`);
-    
+    this.logger.log(
+      `Processing streaming message from user: ${messageDto.userId}`,
+    );
+
     try {
       if (!this.useBedrockService) {
         // For mock responses, simulate streaming
@@ -91,7 +101,7 @@ export class ChatService {
       }
 
       const context = this.getOrCreateContext(messageDto.userId);
-      
+
       context.messages.push({
         role: 'user',
         content: messageDto.content,
@@ -118,10 +128,9 @@ export class ChatService {
           }
         },
       );
-
     } catch (error) {
       this.logger.error(`Error in streaming: ${error.message}`, error.stack);
-      
+
       // Fallback to regular response
       const fallbackResponse = await this.processMockResponse(messageDto);
       await this.simulateStreaming(fallbackResponse, onChunk);
@@ -142,14 +151,22 @@ export class ChatService {
   private maintainContextWindow(context: ChatContext): void {
     // Keep only the last maxContextMessages, but always keep system message if present
     if (context.messages.length > this.maxContextMessages) {
-      const systemMessages = context.messages.filter(msg => msg.role === 'system');
+      const systemMessages = context.messages.filter(
+        (msg) => msg.role === 'system',
+      );
       const recentMessages = context.messages
-        .filter(msg => msg.role !== 'system')
+        .filter((msg) => msg.role !== 'system')
         .slice(-this.maxContextMessages);
-      
+
       context.messages = [...systemMessages, ...recentMessages];
     }
   }
+
+  /**
+   * ADD SYSTEM PROMPT
+   * @param messages
+   * @returns
+   */
 
   private addSystemPrompt(messages: BedrockMessage[]): BedrockMessage[] {
     const systemPrompt = `You are a helpful AI assistant in a chat application. You should:
@@ -172,30 +189,33 @@ Format your responses to be visually appealing with proper markdown structure in
 Remember you're in a chat interface similar to Claude AI, so maintain that level of quality and helpfulness.`;
 
     // Check if system message already exists
-    const hasSystemMessage = messages.some(msg => msg.role === 'system');
-    
+    const hasSystemMessage = messages.some((msg) => msg.role === 'system');
+
     if (!hasSystemMessage) {
-      return [
-        { role: 'system' as const, content: systemPrompt },
-        ...messages,
-      ];
+      return [{ role: 'system' as const, content: systemPrompt }, ...messages];
     }
-    
+
     return messages;
   }
 
-  private async simulateStreaming(text: string, onChunk: (chunk: string) => void): Promise<void> {
+  private async simulateStreaming(
+    text: string,
+    onChunk: (chunk: string) => void,
+  ): Promise<void> {
     const words = text.split(' ');
     const chunkSize = 3; // Send 3 words at a time
-    
+
     for (let i = 0; i < words.length; i += chunkSize) {
-      const chunk = words.slice(i, i + chunkSize).join(' ') + 
-                   (i + chunkSize < words.length ? ' ' : '');
-      
+      const chunk =
+        words.slice(i, i + chunkSize).join(' ') +
+        (i + chunkSize < words.length ? ' ' : '');
+
       onChunk(chunk);
-      
+
       // Small delay to simulate real streaming
-      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
+      await new Promise((resolve) =>
+        setTimeout(resolve, 50 + Math.random() * 100),
+      );
     }
   }
 
@@ -203,15 +223,49 @@ Remember you're in a chat interface similar to Claude AI, so maintain that level
   private async processMockResponse(messageDto: MessageDto): Promise<string> {
     // Simulate processing time
     await this.delay(800 + Math.random() * 1500);
-    
+
     const content = messageDto.content.toLowerCase();
-    
+
     // Route to appropriate response type based on content
-    if (this.containsKeywords(content, ['code', 'programming', 'function', 'class', 'typescript', 'javascript', 'python', 'java', 'c++', 'c#', 'go', 'rust'])) {
+    if (
+      this.containsKeywords(content, [
+        'code',
+        'programming',
+        'function',
+        'class',
+        'typescript',
+        'javascript',
+        'python',
+        'java',
+        'c++',
+        'c#',
+        'go',
+        'rust',
+      ])
+    ) {
       return this.generateCodeResponse(messageDto.content);
-    } else if (this.containsKeywords(content, ['explain', 'how', 'what', 'why', 'understand', 'tutorial', 'learn'])) {
+    } else if (
+      this.containsKeywords(content, [
+        'explain',
+        'how',
+        'what',
+        'why',
+        'understand',
+        'tutorial',
+        'learn',
+      ])
+    ) {
       return this.generateExplanationResponse(messageDto.content);
-    } else if (this.containsKeywords(content, ['analyze', 'analysis', 'compare', 'evaluate', 'assessment', 'review'])) {
+    } else if (
+      this.containsKeywords(content, [
+        'analyze',
+        'analysis',
+        'compare',
+        'evaluate',
+        'assessment',
+        'review',
+      ])
+    ) {
       return this.generateAnalysisResponse(messageDto.content);
     } else {
       return this.generateGeneralResponse(messageDto.content);
@@ -219,7 +273,7 @@ Remember you're in a chat interface similar to Claude AI, so maintain that level
   }
 
   private containsKeywords(text: string, keywords: string[]): boolean {
-    return keywords.some(keyword => text.includes(keyword));
+    return keywords.some((keyword) => text.includes(keyword));
   }
 
   private generateCodeResponse(input: string): string {
@@ -365,7 +419,7 @@ I'm here to help make your project successful and efficient!`;
   }
 
   private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // Utility methods for conversation management
@@ -374,7 +428,10 @@ I'm here to help make your project successful and efficient!`;
     this.logger.log(`Cleared context for user: ${userId}`);
   }
 
-  getUserContextInfo(userId: string): { messageCount: number; lastActivity: Date | null } {
+  getUserContextInfo(userId: string): {
+    messageCount: number;
+    lastActivity: Date | null;
+  } {
     const context = this.conversationContexts.get(userId);
     return {
       messageCount: context?.messages.length || 0,
@@ -385,7 +442,7 @@ I'm here to help make your project successful and efficient!`;
   // Clean up old contexts (should be called periodically)
   cleanupOldContexts(maxAgeHours: number = 24): void {
     const cutoffTime = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
-    
+
     for (const [userId, context] of this.conversationContexts.entries()) {
       if (context.lastActivity < cutoffTime) {
         this.conversationContexts.delete(userId);

@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -5,7 +7,6 @@ import {
   InvokeModelCommand,
   InvokeModelWithResponseStreamCommand,
 } from '@aws-sdk/client-bedrock-runtime';
-import { fromEnv } from '@aws-sdk/credential-providers';
 
 export interface BedrockMessage {
   role: 'user' | 'assistant' | 'system';
@@ -40,10 +41,18 @@ export class BedrockService implements OnModuleInit {
   private readonly topP: number;
 
   constructor(private configService: ConfigService) {
-    this.modelId = this.configService.get<string>('BEDROCK_MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0');
-    this.maxTokens = this.configService.get<number>('MAX_TOKENS', 4096);
-    this.temperature = this.configService.get<number>('TEMPERATURE', 0.7);
-    this.topP = this.configService.get<number>('TOP_P', 0.9);
+    this.modelId = this.configService.get<string>(
+      'BEDROCK_MODEL_ID',
+      'anthropic.claude-3-sonnet-20240229-v1:0',
+    );
+    this.maxTokens = parseInt(
+      this.configService.get<string>('MAX_TOKENS', '4096'),
+      10,
+    );
+    this.temperature = parseFloat(
+      this.configService.get<string>('TEMPERATURE', '0.7'),
+    );
+    this.topP = parseFloat(this.configService.get<string>('TOP_P', '0.9'));
   }
 
   async onModuleInit() {
@@ -53,30 +62,72 @@ export class BedrockService implements OnModuleInit {
   private async initializeBedrockClient() {
     try {
       const region = this.configService.get<string>('AWS_REGION', 'us-east-1');
-      
+      const accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID');
+      const secretAccessKey = this.configService.get<string>(
+        'AWS_SECRET_ACCESS_KEY',
+      );
+
+      // Debug logging for credential verification
+      this.logger.log(`🔧 Initializing Bedrock client...`);
+      this.logger.log(`📍 Region: ${region}`);
+      this.logger.log(
+        `🔑 Access Key ID: ${accessKeyId ? `${accessKeyId.substring(0, 8)}...` : 'NOT SET'}`,
+      );
+      this.logger.log(`🔐 Secret Key: ${secretAccessKey ? 'SET' : 'NOT SET'}`);
+
+      if (!accessKeyId || !secretAccessKey) {
+        throw new Error(
+          'AWS credentials not found. Please check your .env file contains AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY',
+        );
+      }
+
       this.bedrockClient = new BedrockRuntimeClient({
         region,
-        credentials: fromEnv(), // Uses AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from env
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+        },
       });
 
       this.logger.log(`✅ Bedrock client initialized for region: ${region}`);
       this.logger.log(`📋 Using model: ${this.modelId}`);
-      
+
       // Test the connection
       await this.testConnection();
     } catch (error) {
-      this.logger.error('❌ Failed to initialize Bedrock client:', error.message);
+      this.logger.error(
+        '❌ Failed to initialize Bedrock client:',
+        error.message,
+      );
+      this.logger.error('💡 Common solutions:');
+      this.logger.error('   1. Check your .env file is in the project root');
+      this.logger.error(
+        '   2. Verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are correct',
+      );
+      this.logger.error(
+        '   3. Ensure AWS_REGION is set to us-east-1 or us-west-2',
+      );
+      this.logger.error(
+        '   4. Check IAM user has bedrock:InvokeModel permissions',
+      );
       throw error;
     }
   }
 
   private async testConnection() {
     try {
-      const testMessage = "Hello! Please respond with just 'Connection successful' to test the API.";
-      const response = await this.generateResponse([{ role: 'user', content: testMessage }]);
+      const testMessage =
+        "Hello! Please respond with just 'Connection successful' to test the API.";
+      const response = await this.generateResponse([
+        { role: 'user', content: testMessage },
+      ]);
       this.logger.log('🧪 Bedrock connection test successful');
+      this.logger.log(
+        `📝 Test response: ${response.content.substring(0, 100)}...`,
+      );
     } catch (error) {
       this.logger.warn('⚠️ Bedrock connection test failed:', error.message);
+      // Don't throw here - app should still start even if test fails
     }
   }
 
@@ -99,7 +150,7 @@ export class BedrockService implements OnModuleInit {
 
   async generateStreamResponse(
     messages: BedrockMessage[],
-    onChunk: (chunk: BedrockStreamChunk) => void
+    onChunk: (chunk: BedrockStreamChunk) => void,
   ): Promise<void> {
     try {
       if (this.modelId.includes('anthropic.claude')) {
@@ -119,19 +170,39 @@ export class BedrockService implements OnModuleInit {
     }
   }
 
-  private async invokeClaudeModel(messages: BedrockMessage[]): Promise<BedrockResponse> {
-    const prompt = this.formatClaudePrompt(messages);
-    
-    const requestBody = {
-      anthropic_version: "bedrock-2023-05-31",
+  private async invokeClaudeModel(
+    messages: BedrockMessage[],
+  ): Promise<BedrockResponse> {
+    // Filter out system messages and format for Claude 3
+    const conversationMessages = messages.filter(
+      (msg) => msg.role !== 'system',
+    );
+    const systemMessage = messages.find((msg) => msg.role === 'system');
+
+    const requestBody: any = {
+      anthropic_version: 'bedrock-2023-05-31',
       max_tokens: this.maxTokens,
-      temperature: this.temperature,
-      top_p: this.topP,
-      messages: messages.map(msg => ({
+      messages: conversationMessages.map((msg) => ({
         role: msg.role,
         content: msg.content,
       })),
     };
+
+    // Add optional parameters only if they have valid values
+    if (this.temperature >= 0 && this.temperature <= 1) {
+      requestBody.temperature = this.temperature;
+    }
+
+    if (this.topP >= 0 && this.topP <= 1) {
+      requestBody.top_p = this.topP;
+    }
+
+    // Add system message if present
+    if (systemMessage) {
+      requestBody.system = systemMessage.content;
+    }
+
+    this.logger.debug('Request body:', JSON.stringify(requestBody, null, 2));
 
     const command = new InvokeModelCommand({
       modelId: this.modelId,
@@ -155,18 +226,36 @@ export class BedrockService implements OnModuleInit {
 
   private async invokeClaudeModelStream(
     messages: BedrockMessage[],
-    onChunk: (chunk: BedrockStreamChunk) => void
+    onChunk: (chunk: BedrockStreamChunk) => void,
   ): Promise<void> {
-    const requestBody = {
-      anthropic_version: "bedrock-2023-05-31",
+    // Filter out system messages and format for Claude 3
+    const conversationMessages = messages.filter(
+      (msg) => msg.role !== 'system',
+    );
+    const systemMessage = messages.find((msg) => msg.role === 'system');
+
+    const requestBody: any = {
+      anthropic_version: 'bedrock-2023-05-31',
       max_tokens: this.maxTokens,
-      temperature: this.temperature,
-      top_p: this.topP,
-      messages: messages.map(msg => ({
+      messages: conversationMessages.map((msg) => ({
         role: msg.role,
         content: msg.content,
       })),
     };
+
+    // Add optional parameters only if they have valid values
+    if (this.temperature >= 0 && this.temperature <= 1) {
+      requestBody.temperature = this.temperature;
+    }
+
+    if (this.topP >= 0 && this.topP <= 1) {
+      requestBody.top_p = this.topP;
+    }
+
+    // Add system message if present
+    if (systemMessage) {
+      requestBody.system = systemMessage.content;
+    }
 
     const command = new InvokeModelWithResponseStreamCommand({
       modelId: this.modelId,
@@ -176,15 +265,20 @@ export class BedrockService implements OnModuleInit {
     });
 
     const response = await this.bedrockClient.send(command);
-    
+
     if (response.body) {
       let accumulatedContent = '';
-      
+
       for await (const chunk of response.body) {
         if (chunk.chunk?.bytes) {
-          const chunkData = JSON.parse(new TextDecoder().decode(chunk.chunk.bytes));
-          
-          if (chunkData.type === 'content_block_delta' && chunkData.delta?.text) {
+          const chunkData = JSON.parse(
+            new TextDecoder().decode(chunk.chunk.bytes),
+          );
+
+          if (
+            chunkData.type === 'content_block_delta' &&
+            chunkData.delta?.text
+          ) {
             accumulatedContent += chunkData.delta.text;
             onChunk({
               content: chunkData.delta.text,
@@ -205,9 +299,11 @@ export class BedrockService implements OnModuleInit {
     }
   }
 
-  private async invokeLlamaModel(messages: BedrockMessage[]): Promise<BedrockResponse> {
+  private async invokeLlamaModel(
+    messages: BedrockMessage[],
+  ): Promise<BedrockResponse> {
     const prompt = this.formatLlamaPrompt(messages);
-    
+
     const requestBody = {
       prompt,
       max_gen_len: this.maxTokens,
@@ -235,9 +331,11 @@ export class BedrockService implements OnModuleInit {
     };
   }
 
-  private async invokeTitanModel(messages: BedrockMessage[]): Promise<BedrockResponse> {
+  private async invokeTitanModel(
+    messages: BedrockMessage[],
+  ): Promise<BedrockResponse> {
     const prompt = this.formatTitanPrompt(messages);
-    
+
     const requestBody = {
       inputText: prompt,
       textGenerationConfig: {
@@ -270,7 +368,7 @@ export class BedrockService implements OnModuleInit {
 
   private formatClaudePrompt(messages: BedrockMessage[]): string {
     // Claude models use the messages format directly
-    return messages.map(msg => `${msg.role}: ${msg.content}`).join('\n\n');
+    return messages.map((msg) => `${msg.role}: ${msg.content}`).join('\n\n');
   }
 
   private formatLlamaPrompt(messages: BedrockMessage[]): string {
@@ -288,13 +386,17 @@ export class BedrockService implements OnModuleInit {
 
   private formatTitanPrompt(messages: BedrockMessage[]): string {
     // Titan uses a simple conversational format
-    return messages.map(msg => {
-      if (msg.role === 'user') {
-        return `Human: ${msg.content}`;
-      } else {
-        return `Assistant: ${msg.content}`;
-      }
-    }).join('\n\n') + '\n\nAssistant:';
+    return (
+      messages
+        .map((msg) => {
+          if (msg.role === 'user') {
+            return `Human: ${msg.content}`;
+          } else {
+            return `Assistant: ${msg.content}`;
+          }
+        })
+        .join('\n\n') + '\n\nAssistant:'
+    );
   }
 
   // Utility methods
